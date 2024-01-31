@@ -1,0 +1,8 @@
+numpy
+ipython
+psutil
+pyopengl
+pyqtgraph
+pyside6
+
+dvg-devices~=1.3
