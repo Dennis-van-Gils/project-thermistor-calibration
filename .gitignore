@@ -1,4 +1,5 @@
 ~$*.*
+.vscode/settings.json
 \\.git/
 
 # Specific to this library
