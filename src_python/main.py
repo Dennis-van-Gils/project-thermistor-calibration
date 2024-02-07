@@ -3,18 +3,20 @@
 """Automation to calibrate thermistors in a temperature-regulated bath.
 
 Used devices:
-- Keysight 34970A/34972A data acquisition/switch unit containing a 20-channel
-  multiplexer plug-in module (34901A). Hence, we simply call this device a mux.
+
+- Keysight 34970A data acquisition/switch unit containing a 20-channel
+  multiplexer plug-in module (34901A)
 - Picotech PT-104 pt100/1000 temperature logger
 - PolyScience PD15R recirculating bath
 
-The Keysight unit is loaded with a 20-channel multiplexer board, whose channels
-are to be populated with the thermistors you wish to calibrate. All thermistors
-are to be placed inside the Polyscience temperature bath. The resistances of
-each thermistor will be logged. Additionally, an extra PT100 temperature probe
-(Picotech PT-104) placed alongside the thermistors will log the bath
-temperature. The bath temperature as measured by the Polyscience will also be
-logged.
+The Keysight unit is loaded with a 20-channel multiplexer board, hence we simply
+call this device a mux. The mux channels are to be populated with the
+thermistors you wish to calibrate. All thermistors are to be placed inside the
+PolyScience temperature bath. The resistances of each thermistor will be logged.
+Additionally, an extra pt100 temperature probe (Picotech PT-104, channel 1)
+placed alongside the thermistors will log the bath temperature. The bath
+temperature as measured by the PolyScience will also be logged (P1: internal
+temperature probe, P2: external temperature probe).
 """
 __author__ = "Dennis van Gils"
 __authoremail__ = "vangils.dennis@gmail.com"
