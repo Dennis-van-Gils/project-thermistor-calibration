@@ -430,7 +430,7 @@ def write_header_to_log():
     log.write("time[s]\t")
     log.write("P1_temp[degC]\t")
     log.write("P2_temp[degC]\t")
-    log.write("PT104_temp[degC]\t")
+    log.write(f"PT104_temp[{chr(177)}0.015degC]\t")
     for idx, channel in enumerate(mux.state.all_scan_list_channels):
         log.write(f"CH{channel:s}[Ohm]")
         log.write("\t" if idx < N_mux_channels - 1 else "\n")
