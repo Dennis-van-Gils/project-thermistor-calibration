@@ -230,24 +230,27 @@ class MainWindow(QtWid.QWidget):
         pen2 = pg.mkPen(color=[255, 255, 0], width=3)
         pen3 = pg.mkPen(color=[0, 128, 255], width=3)
 
-        self.CH_P1_temp = HistoryChartCurve(
+        self.tscurve_P1_temp = HistoryChartCurve(
             capacity=CHART_CAPACITY,
             linked_curve=self.pi_bath.plot(pen=pen1, name="P1"),
         )
-        self.CH_P2_temp = HistoryChartCurve(
+        self.tscurve_P2_temp = HistoryChartCurve(
             capacity=CHART_CAPACITY,
             linked_curve=self.pi_bath.plot(pen=pen2, name="P2"),
         )
-        self.CH_PT104_ch1_T = HistoryChartCurve(
+        self.tscurve_pt104_temp = HistoryChartCurve(
             capacity=CHART_CAPACITY,
             linked_curve=self.pi_bath.plot(pen=pen3, name="PT104"),
         )
 
         self.tscurves_bath = [
-            self.CH_P1_temp,
-            self.CH_P2_temp,
-            self.CH_PT104_ch1_T,
+            self.tscurve_P1_temp,
+            self.tscurve_P2_temp,
+            self.tscurve_pt104_temp,
         ]
+
+        # P2 is the external temp probe. Set invisible because we don't use it.
+        self.tscurve_P2_temp.curve.setVisible(False)
 
         # ----------------------------------------------------------------------
         #   PlotManager
@@ -337,7 +340,6 @@ class MainWindow(QtWid.QWidget):
 
         for tscurve in self.tscurves_all:
             tscurve.update()
-        self.CH_P2_temp.curve.setVisible(False)
 
         self.qled_P1_temp.setText(f"{bath.state.P1_temp:.2f}")
         self.qled_P2_temp.setText(f"{bath.state.P2_temp:.2f}")
@@ -411,9 +413,9 @@ def postprocess_mux_fun():
         bath.query_P2_temp()  # External probe
 
     # Add temperature readings to charts
-    window.CH_P1_temp.appendData(now, bath.state.P1_temp)
-    window.CH_P2_temp.appendData(now, bath.state.P2_temp)
-    window.CH_PT104_ch1_T.appendData(now, pt104.state.ch1_T)
+    window.tscurve_P1_temp.appendData(now, bath.state.P1_temp)
+    window.tscurve_P2_temp.appendData(now, bath.state.P2_temp)
+    window.tscurve_pt104_temp.appendData(now, pt104.state.ch1_T)
 
     # Log readings to file
     log.update(mode="w")
