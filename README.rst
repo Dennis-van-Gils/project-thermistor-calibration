@@ -38,8 +38,10 @@ temperatures. The manual of the bath can be found
 `here <https://github.com/Dennis-van-Gils/project-thermistor-calibration/blob/main/docs/>`_.
 
 The mux channels that are to be logged must be defined by editing the variables
-``scan_list`` and ``MUX_SCPI_COMMANDS`` inside of the `main.py` file.
-Background on the SCPI commands can be found in chapter 4 of the Keysight manual
+``scan_list`` and ``MUX_SCPI_COMMANDS`` inside of the
+`main.py
+<https://github.com/Dennis-van-Gils/project-thermistor-calibration/blob/master/src_python/main.py#L466>`_
+file. Background on the SCPI commands can be found in chapter 4 of the Keysight manual
 found `here <https://github.com/Dennis-van-Gils/project-thermistor-calibration/blob/main/docs/>`_.
 
 .. image:: https://raw.githubusercontent.com/Dennis-van-Gils/project-thermistor-calibration/master/screenshot.png
