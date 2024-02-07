@@ -19,7 +19,7 @@ logged.
 __author__ = "Dennis van Gils"
 __authoremail__ = "vangils.dennis@gmail.com"
 __url__ = "https://github.com/Dennis-van-Gils/project-thermistor-calibration"
-__date__ = "06-02-2024"
+__date__ = "07-02-2024"
 __version__ = "1.0.0"
 print(__url__)
 
@@ -389,7 +389,7 @@ def postprocess_mux_fun():
 
     # DEBUG info
     # It should show that this thread is running inside the 'MUX_DAQ' thread
-    # dprint("thread: %s" % QtCore.QThread.currentThread().objectName())
+    # dprint(f"thread: {QtCore.QThread.currentThread().objectName()}")
 
     if mux_qdev.is_MUX_scanning:
         readings = mux.state.readings
@@ -430,10 +430,10 @@ def write_header_to_log():
     log.write("time[s]\t")
     log.write("P1_temp[degC]\t")
     log.write("P2_temp[degC]\t")
-    log.write("PT104_Ch1[degC]\t")
-    for i in range(N_mux_channels - 1):
-        log.write("CH%s[Ohm]\t" % mux.state.all_scan_list_channels[i])
-    log.write("CH%s[Ohm]\n" % mux.state.all_scan_list_channels[-1])
+    log.write("PT104_temp[degC]\t")
+    for idx, channel in enumerate(mux.state.all_scan_list_channels):
+        log.write(f"CH{channel:s}[Ohm]")
+        log.write("\t" if idx < N_mux_channels - 1 else "\n")
 
 
 def write_data_to_log():
@@ -441,11 +441,11 @@ def write_data_to_log():
     log.write(f"{bath.state.P1_temp:.2f}\t")
     log.write(f"{bath.state.P2_temp:.2f}\t")
     log.write(f"{pt104.state.ch1_T:.3f}")
-    for i in range(N_mux_channels):
-        if len(mux.state.readings) <= i:
-            log.write("\t%.5e" % np.nan)
+    for idx in range(N_mux_channels):
+        if len(mux.state.readings) <= idx:
+            log.write(f"\t{np.nan:.5e}")
         else:
-            log.write("\t%.5e" % mux.state.readings[i])
+            log.write(f"\t{mux.state.readings[idx]:.5e}")
     log.write("\n")
 
 
@@ -464,10 +464,10 @@ if __name__ == "__main__":
     # SCPI commands to be send to the mux to set up the scan cycle
     scan_list = "(@101)"
     MUX_SCPI_COMMANDS = [
-        "rout:open %s" % scan_list,
-        "conf:res 1e6,%s" % scan_list,
-        "sens:res:nplc 1,%s" % scan_list,
-        "rout:scan %s" % scan_list,
+        f"rout:open {scan_list:s}",
+        f"conf:res 1e6,{scan_list:s}",
+        f"sens:res:nplc 1,{scan_list:s}",
+        f"rout:scan {scan_list:s}",
     ]
 
     rm = pyvisa.ResourceManager()
@@ -516,11 +516,16 @@ if __name__ == "__main__":
         dev=mux,
         DAQ_interval_ms=DAQ_INTERVAL_MS,
         DAQ_postprocess_MUX_scan_function=postprocess_mux_fun,
+        debug=DEBUG,
     )
     mux_qdev.set_table_readings_format("%.5e")
     mux_qdev.qgrp.setFixedWidth(420)
 
-    pt104_qdev = Picotech_PT104_qdev(dev=pt104, DAQ_interval_ms=1000)
+    pt104_qdev = Picotech_PT104_qdev(
+        dev=pt104,
+        DAQ_interval_ms=1000,  # Needs ~720 ms per channel at minimum
+        debug=DEBUG,
+    )
 
     # Create GUI window
     # -----------------
@@ -531,7 +536,6 @@ if __name__ == "__main__":
     #   Create mux history charts depending on the number of scan channels
     # --------------------------------------------------------------------------
 
-    # Create thread-safe `HistoryChartCurve`s, aka `tscurves`
     cm = plt.get_cmap("gist_rainbow")
     for i in range(N_mux_channels):
         color = cm(1.0 * i / N_mux_channels)  # Color will now be an RGBA tuple
