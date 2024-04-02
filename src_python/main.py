@@ -21,15 +21,34 @@ temperature probe, P2: external temperature probe).
 __author__ = "Dennis van Gils"
 __authoremail__ = "vangils.dennis@gmail.com"
 __url__ = "https://github.com/Dennis-van-Gils/project-thermistor-calibration"
-__date__ = "07-02-2024"
-__version__ = "1.0.0"
+__date__ = "02-04-2024"
+__version__ = "1.1.0"
 print(__url__)
+# pylint: disable=wrong-import-position, missing-function-docstring, bare-except
 
-import os
 import sys
 import time
 
-# Constants
+# VISA address of the Keysight 3497xA data acquisition/switch unit containing a
+# multiplexer plug-in module. Hence, we simply call this device a 'mux'.
+# MUX_VISA_ADDRESS = "USB0::0x0957::0x2007::MY49018071::INSTR"
+MUX_VISA_ADDRESS = "GPIB0::9::INSTR"
+
+# SCPI commands to be send to the mux to set up the scan cycle
+scan_list = "(@101:110)"
+MUX_SCPI_COMMANDS = [
+    f"rout:open {scan_list:s}",
+    f"conf:res 1e6,{scan_list:s}",
+    f"sens:res:nplc 1,{scan_list:s}",
+    f"rout:scan {scan_list:s}",
+]
+
+# Settings for the Picotech PT-104
+PT104_IP_ADDRESS = "10.10.100.2"
+PT104_PORT = 1234
+PT104_ENA_channels = [1, 0, 0, 0]
+PT104_gain_channels = [1, 0, 0, 0]
+
 # fmt: off
 DAQ_INTERVAL_MS   = 1000  # [ms] Update interval for the mux to perform a scan
 CHART_INTERVAL_MS = 1000  # [ms] Update interval for all charts
@@ -66,14 +85,14 @@ from PySide6 import QtCore, QtGui, QtWidgets as QtWid
 from PySide6.QtCore import Slot
 import pyqtgraph as pg
 
-print(f"PySide6   {QtCore.__version__}")
+print(f"PySide6   {QtCore.__version__}")  # type: ignore
 print(f"PyQtGraph {pg.__version__}")
 
 if TRY_USING_OPENGL:
     try:
         import OpenGL.GL as gl  # pylint: disable=unused-import
         from OpenGL.version import __version__ as gl_version
-    except:
+    except:  # pylint: disable=bare-except
         print("PyOpenGL  not found")
         print("To install: `conda install pyopengl` or `pip install pyopengl`")
     else:
@@ -90,24 +109,27 @@ print()
 pg.setConfigOption("background", controls.COLOR_GRAPH_BG)
 pg.setConfigOption("foreground", controls.COLOR_GRAPH_FG)
 
-
-def get_current_date_time():
-    cur_date_time = QtCore.QDateTime.currentDateTime()
-    return (
-        cur_date_time.toString("dd-MM-yyyy"),  # Date
-        cur_date_time.toString("HH:mm:ss"),  # Time
-        cur_date_time.toString("yyMMdd_HHmmss"),  # Reverse notation date-time
-    )
-
-
 # ------------------------------------------------------------------------------
 #   MainWindow
 # ------------------------------------------------------------------------------
 
 
 class MainWindow(QtWid.QWidget):
-    def __init__(self, parent=None, **kwargs):
+    def __init__(
+        self,
+        qdev_mux: Keysight_3497xA_qdev,
+        qdev_pt104: Picotech_PT104_qdev,
+        dev_bath: PolyScience_PD_bath,
+        qlog: FileLogger,
+        parent=None,
+        **kwargs,
+    ):
         super().__init__(parent, **kwargs)
+
+        self.qdev_mux = qdev_mux
+        self.qdev_pt104 = qdev_pt104
+        self.dev_bath = dev_bath
+        self.qlog = qlog
 
         self.setWindowTitle("Calibration thermistors")
         self.setGeometry(20, 60, 1200, 900)
@@ -116,6 +138,9 @@ class MainWindow(QtWid.QWidget):
             + controls.SS_GROUP
             + controls.SS_HOVER
         )
+
+        self.timer_GUI = QtCore.QTimer()
+        self.timer_GUI.timeout.connect(self.update_GUI)
 
         # -------------------------
         #   Top frame
@@ -130,9 +155,9 @@ class MainWindow(QtWid.QWidget):
         vbox_left.addWidget(self.qlbl_recording_time, stretch=0)
 
         # Middle box
-        self.qlbl_title = QtWid.QLabel(
-            "Thermistor calibration",
-            font=QtGui.QFont("Palatino", 14, weight=QtGui.QFont.Weight.Bold),
+        self.qlbl_title = QtWid.QLabel("Thermistor calibration")
+        self.qlbl_title.setFont(
+            QtGui.QFont("Palatino", 14, weight=QtGui.QFont.Weight.Bold)
         )
         self.qlbl_title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.qlbl_cur_date_time = QtWid.QLabel("00-00-0000    00:00:00")
@@ -143,7 +168,9 @@ class MainWindow(QtWid.QWidget):
             "Click to start recording to file"
         )
         self.qpbt_record.setMinimumWidth(400)
-        self.qpbt_record.clicked.connect(lambda state: log.record(state))
+        # fmt: off
+        self.qpbt_record.clicked.connect(lambda state: qlog.record(state))  # pylint: disable=unnecessary-lambda
+        # fmt: on
 
         vbox_middle = QtWid.QVBoxLayout()
         vbox_middle.addWidget(self.qlbl_title)
@@ -152,11 +179,13 @@ class MainWindow(QtWid.QWidget):
 
         # Right box
         p = {
+            "parent": None,
             "alignment": QtCore.Qt.AlignmentFlag.AlignRight
-            | QtCore.Qt.AlignmentFlag.AlignVCenter
+            | QtCore.Qt.AlignmentFlag.AlignVCenter,
         }
-        self.qpbt_exit = QtWid.QPushButton("Exit", minimumHeight=30)
+        self.qpbt_exit = QtWid.QPushButton("Exit")
         self.qpbt_exit.clicked.connect(self.close)
+        self.qpbt_exit.setMinimumHeight(30)
         self.qlbl_GitHub = QtWid.QLabel(
             f'<a href="{__url__}">GitHub source</a>', **p
         )
@@ -166,7 +195,8 @@ class MainWindow(QtWid.QWidget):
         )
         self.qlbl_GitHub.setOpenExternalLinks(True)
 
-        vbox_right = QtWid.QVBoxLayout(spacing=4)
+        vbox_right = QtWid.QVBoxLayout()
+        vbox_right.setSpacing(4)
         vbox_right.addWidget(self.qpbt_exit, stretch=0)
         vbox_right.addStretch(1)
         vbox_right.addWidget(QtWid.QLabel(__author__, **p))
@@ -202,10 +232,36 @@ class MainWindow(QtWid.QWidget):
         self.pi_mux.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
         self.pi_mux.setAutoVisible(y=True)
 
-        # Placeholders. Will be populated in `main` once the number of mux scan
-        # channels is known.
-        self.tscurves_mux: list[ThreadSafeCurve] = list()
-        self.qgrp_mux_legend = QtWid.QGroupBox("Legend")
+        # ----------------------------------------------------------------------
+        #   Create history charts depending on the number of scan channels
+        # ----------------------------------------------------------------------
+
+        self.tscurves_mux: list[ThreadSafeCurve] = []
+
+        cm = plt.get_cmap("gist_rainbow")
+        for idx, channel in enumerate(
+            qdev_mux.dev.state.all_scan_list_channels
+        ):
+            color = cm(1.0 * idx / qdev_mux.dev.state.N_channels)  # RGBA tuple
+            color = np.array(color) * 255
+            pen = pg.mkPen(color=color, width=2)
+
+            self.tscurves_mux.append(
+                HistoryChartCurve(
+                    capacity=CHART_CAPACITY,
+                    linked_curve=self.pi_mux.plot(pen=pen, name=channel),
+                )
+            )
+
+        # ----------------------------------------------------------------------
+        #   Legend
+        # ----------------------------------------------------------------------
+
+        legend = LegendSelect(linked_curves=self.tscurves_mux)
+        legend.grid.setVerticalSpacing(0)
+
+        self.qgrp_legend = QtWid.QGroupBox("Legend")
+        self.qgrp_legend.setLayout(legend.grid)
 
         # ----------------------------------------------------------------------
         #   Chart: Bath temperatures
@@ -258,13 +314,54 @@ class MainWindow(QtWid.QWidget):
         #   PlotManager
         # ----------------------------------------------------------------------
 
-        # Placeholder. Will be populated in `main` once the number of mux scan
-        # channels is known.
-        self.tscurves_all: list[ThreadSafeCurve] = list()
-
         self.plotitems_all = [self.pi_mux, self.pi_bath]
+        self.tscurves_all = self.tscurves_mux + self.tscurves_bath
+
         self.plot_manager = PlotManager(parent=self)
         self.plot_manager.add_autorange_buttons(linked_plots=self.plotitems_all)
+        self.plot_manager.add_preset_buttons(
+            linked_plots=self.plotitems_all,
+            linked_curves=self.tscurves_all,
+            presets=[
+                {
+                    "button_label": "0:30",
+                    "x_axis_label": "history (sec)",
+                    "x_axis_divisor": 1,
+                    "x_axis_range": (-30, 0),
+                },
+                {
+                    "button_label": "01:00",
+                    "x_axis_label": "history (sec)",
+                    "x_axis_divisor": 1,
+                    "x_axis_range": (-60, 0),
+                },
+                {
+                    "button_label": "03:00",
+                    "x_axis_label": "history (min)",
+                    "x_axis_divisor": 60,
+                    "x_axis_range": (-3, 0),
+                },
+                {
+                    "button_label": "05:00",
+                    "x_axis_label": "history (min)",
+                    "x_axis_divisor": 60,
+                    "x_axis_range": (-5, 0),
+                },
+                {
+                    "button_label": "10:00",
+                    "x_axis_label": "history (min)",
+                    "x_axis_divisor": 60,
+                    "x_axis_range": (-10, 0),
+                },
+                {
+                    "button_label": "30:00",
+                    "x_axis_label": "history (min)",
+                    "x_axis_divisor": 60,
+                    "x_axis_range": (-30, 0),
+                },
+            ],
+        )
+        self.plot_manager.add_clear_button(linked_curves=self.tscurves_all)
 
         qgrp_history = QtWid.QGroupBox("History")
         qgrp_history.setLayout(self.plot_manager.grid)
@@ -276,12 +373,12 @@ class MainWindow(QtWid.QWidget):
         p = {"stretch": 0, "alignment": QtCore.Qt.AlignmentFlag.AlignTop}
 
         vbox_mux = QtWid.QVBoxLayout()
-        vbox_mux.addWidget(self.qgrp_mux_legend, **p)
+        vbox_mux.addWidget(self.qgrp_legend, **p)
         vbox_mux.addWidget(qgrp_history, **p)
         vbox_mux.addStretch(1)
 
         hbox_mux = QtWid.QHBoxLayout()
-        hbox_mux.addWidget(mux_qdev.qgrp, **p)
+        hbox_mux.addWidget(qdev_mux.qgrp, **p)
         hbox_mux.addWidget(self.gw_mux, stretch=1)
         hbox_mux.addLayout(vbox_mux)
 
@@ -311,7 +408,7 @@ class MainWindow(QtWid.QWidget):
 
         vbox_tmp = QtWid.QVBoxLayout()
         vbox_tmp.addWidget(grpb_bath, stretch=0)
-        vbox_tmp.addWidget(pt104_qdev.qgrp, stretch=0)
+        vbox_tmp.addWidget(qdev_pt104.qgrp, stretch=0)
         vbox_tmp.addStretch(1)
 
         hbox_bath = QtWid.QHBoxLayout()
@@ -334,121 +431,23 @@ class MainWindow(QtWid.QWidget):
 
     @Slot()
     def update_GUI(self):
-        str_cur_date, str_cur_time, _ = get_current_date_time()
-        self.qlbl_cur_date_time.setText(f"{str_cur_date}    {str_cur_time}")
+        cur_date_time = QtCore.QDateTime.currentDateTime()
+        self.qlbl_cur_date_time.setText(
+            cur_date_time.toString("dd-MM-yyyy")
+            + "    "
+            + cur_date_time.toString("HH:mm:ss")
+        )
         self.qlbl_recording_time.setText(
-            f"REC: {log.pretty_elapsed()}" if log.is_recording() else ""
+            f"REC: {self.qlog.pretty_elapsed()}"
+            if self.qlog.is_recording()
+            else ""
         )
 
         for tscurve in self.tscurves_all:
             tscurve.update()
 
-        self.qled_P1_temp.setText(f"{bath.state.P1_temp:.2f}")
-        self.qled_P2_temp.setText(f"{bath.state.P2_temp:.2f}")
-
-
-# ------------------------------------------------------------------------------
-#   about_to_quit
-# ------------------------------------------------------------------------------
-
-
-@Slot()
-def about_to_quit():
-    print("About to quit")
-    app.processEvents()
-    log.close()
-    mux_qdev.quit()
-    pt104_qdev.quit()
-
-    try:
-        mux.close()
-    except:
-        pass
-    try:
-        bath.close()
-    except:
-        pass
-    try:
-        pt104.close()
-    except:
-        pass
-    try:
-        rm.close()
-    except:
-        pass
-
-
-# ------------------------------------------------------------------------------
-#   postprocess_mux_fun
-# ------------------------------------------------------------------------------
-
-
-def postprocess_mux_fun():
-    """Will be called during an 'worker_DAQ' update, after a mux scan has been
-    performed. We use it to parse out the scan readings into separate variables
-    and log it to file.
-    """
-
-    # DEBUG info
-    # It should show that this thread is running inside the 'MUX_DAQ' thread
-    # dprint(f"thread: {QtCore.QThread.currentThread().objectName()}")
-
-    if mux_qdev.is_MUX_scanning:
-        readings = mux.state.readings
-        for idx in range(N_mux_channels):
-            if readings[idx] > INFINITY_CAP:
-                readings[idx] = np.nan
-    else:
-        readings = [np.nan] * N_mux_channels
-        mux.state.readings = readings
-
-    # Add mux readings to charts
-    now = time.perf_counter()
-    for idx, tscurve in enumerate(window.tscurves_mux):
-        tscurve.appendData(now, readings[idx])
-
-    # UGLY HACK: Ideally, querying the Polyscience temperatures should happen
-    # inside another dedicated thread. However, we can get away with it by
-    # simply running these queries inside the 'MUX_DAQ' thread without issues.
-    if bath.is_alive:
-        bath.query_P1_temp()
-        bath.query_P2_temp()  # External probe
-
-    # Add temperature readings to charts
-    window.tscurve_P1_temp.appendData(now, bath.state.P1_temp)
-    window.tscurve_P2_temp.appendData(now, bath.state.P2_temp)
-    window.tscurve_pt104_temp.appendData(now, pt104.state.ch1_T)
-
-    # Log readings to file
-    log.update(mode="w")
-
-
-# ------------------------------------------------------------------------------
-#   File logger
-# ------------------------------------------------------------------------------
-
-
-def write_header_to_log():
-    log.write("time[s]\t")
-    log.write("P1_temp[degC]\t")
-    log.write("P2_temp[degC]\t")
-    log.write(f"PT104_temp[{chr(177)}0.015degC]\t")
-    for idx, channel in enumerate(mux.state.all_scan_list_channels):
-        log.write(f"CH{channel:s}[Ohm]")
-        log.write("\t" if idx < N_mux_channels - 1 else "\n")
-
-
-def write_data_to_log():
-    log.write(f"{log.elapsed():.1f}\t")
-    log.write(f"{bath.state.P1_temp:.2f}\t")
-    log.write(f"{bath.state.P2_temp:.2f}\t")
-    log.write(f"{pt104.state.ch1_T:.3f}")
-    for idx in range(N_mux_channels):
-        if len(mux.state.readings) <= idx:
-            log.write(f"\t{np.nan:.5e}")
-        else:
-            log.write(f"\t{mux.state.readings[idx]:.5e}")
-    log.write("\n")
+        self.qled_P1_temp.setText(f"{self.dev_bath.state.P1_temp:.2f}")
+        self.qled_P2_temp.setText(f"{self.dev_bath.state.P2_temp:.2f}")
 
 
 # ------------------------------------------------------------------------------
@@ -460,39 +459,21 @@ if __name__ == "__main__":
     # Connect to: Keysight 3497xA, aka 'mux'
     # --------------------------------------
 
-    # MUX_VISA_ADDRESS = "USB0::0x0957::0x2007::MY49018071::INSTR"
-    MUX_VISA_ADDRESS = "GPIB0::9::INSTR"
-
-    # SCPI commands to be send to the mux to set up the scan cycle
-    scan_list = "(@101)"
-    MUX_SCPI_COMMANDS = [
-        f"rout:open {scan_list:s}",
-        f"conf:res 1e6,{scan_list:s}",
-        f"sens:res:nplc 1,{scan_list:s}",
-        f"rout:scan {scan_list:s}",
-    ]
-
     rm = pyvisa.ResourceManager()
     mux = Keysight_3497xA(MUX_VISA_ADDRESS, "MUX")
+
     if mux.connect(rm):
         mux.begin(MUX_SCPI_COMMANDS)
-        N_mux_channels = len(mux.state.all_scan_list_channels)
     else:
         dprint("WARNING: Could not connect to Keysight 3497xA.\n", ANSI.RED)
-        N_mux_channels = 0
 
     # Connect to: Picotech PT-104
     # ---------------------------
 
-    IP_ADDRESS = "10.10.100.2"
-    PORT = 1234
-    ENA_channels = [1, 0, 0, 0]
-    gain_channels = [1, 0, 0, 0]
-
     pt104 = Picotech_PT104(name="PT104")
-    if pt104.connect(IP_ADDRESS, PORT):
+    if pt104.connect(PT104_IP_ADDRESS, PT104_PORT):
         pt104.begin()
-        pt104.start_conversion(ENA_channels, gain_channels)
+        pt104.start_conversion(PT104_ENA_channels, PT104_gain_channels)
     else:
         dprint("WARNING: Could not connect to PicoTech PT-104.\n", ANSI.RED)
 
@@ -508,11 +489,49 @@ if __name__ == "__main__":
 
     QtCore.QThread.currentThread().setObjectName("MAIN")  # For DEBUG info
     app = QtWid.QApplication(sys.argv)
-    app.setFont(QtGui.QFont("Arial", 9))
-    app.aboutToQuit.connect(about_to_quit)
 
     # Set up multi-threaded communication with devices
     # ------------------------------------------------
+
+    def postprocess_mux_fun():
+        """Will be called during an 'worker_DAQ' update, after a mux scan has
+        been performed. We use it to parse out the scan readings into separate
+        variables and log it to file.
+        """
+
+        # DEBUG info
+        # It should show that this thread is running inside the 'MUX_DAQ' thread
+        # dprint(f"thread: {QtCore.QThread.currentThread().objectName()}")
+
+        if mux_qdev.is_MUX_scanning:
+            readings = mux.state.readings
+            for idx in range(mux.state.N_channels):
+                if readings[idx] > INFINITY_CAP:
+                    readings[idx] = np.nan
+        else:
+            readings = [np.nan] * mux.state.N_channels
+            mux.state.readings = readings
+
+        # Add mux readings to charts
+        now = time.perf_counter()
+        for idx, tscurve in enumerate(window.tscurves_mux):
+            tscurve.appendData(now, readings[idx])
+
+        # UGLY HACK: Ideally, querying the Polyscience temperatures should
+        # happen inside another dedicated thread. However, we can get away with
+        # it by simply running these queries inside the 'MUX_DAQ' thread without
+        # issues.
+        if bath.is_alive:
+            bath.query_P1_temp()
+            bath.query_P2_temp()  # External probe
+
+        # Add temperature readings to charts
+        window.tscurve_P1_temp.appendData(now, bath.state.P1_temp)
+        window.tscurve_P2_temp.appendData(now, bath.state.P2_temp)
+        window.tscurve_pt104_temp.appendData(now, pt104.state.ch1_T)
+
+        # Log readings to file
+        log.update(mode="w")
 
     mux_qdev = Keysight_3497xA_qdev(
         dev=mux,
@@ -520,8 +539,6 @@ if __name__ == "__main__":
         DAQ_postprocess_MUX_scan_function=postprocess_mux_fun,
         debug=DEBUG,
     )
-    mux_qdev.set_table_readings_format("%.5e")
-    mux_qdev.qgrp.setFixedWidth(420)
 
     pt104_qdev = Picotech_PT104_qdev(
         dev=pt104,
@@ -529,92 +546,32 @@ if __name__ == "__main__":
         debug=DEBUG,
     )
 
-    # Create GUI window
-    # -----------------
-
-    window = MainWindow()
-
-    # --------------------------------------------------------------------------
-    #   Create mux history charts depending on the number of scan channels
-    # --------------------------------------------------------------------------
-
-    cm = plt.get_cmap("gist_rainbow")
-    for i in range(N_mux_channels):
-        color = cm(1.0 * i / N_mux_channels)  # Color will now be an RGBA tuple
-        color = np.array(color) * 255
-        pen = pg.mkPen(color=color, width=3)
-
-        window.tscurves_mux.append(
-            HistoryChartCurve(
-                capacity=CHART_CAPACITY,
-                linked_curve=window.pi_mux.plot(
-                    pen=pen, name=mux.state.all_scan_list_channels[i]
-                ),
-            )
-        )
-
-    legend = LegendSelect(linked_curves=window.tscurves_mux)
-    legend.grid.setVerticalSpacing(0)
-    window.qgrp_mux_legend.setLayout(legend.grid)
-
-    # --------------------------------------------------------------------------
-    #   Finalize plot manager
-    # --------------------------------------------------------------------------
-
-    # Nominally, the plot manager can be fully set up inside the `MainWindow()`
-    # function if all plot curves are known ahead of time. However, because the
-    # number of mux curves to be managed by the plot manager is only known at
-    # run-time, we must break out the following code block to here:
-
-    window.tscurves_all = window.tscurves_mux + window.tscurves_bath
-
-    window.plot_manager.add_preset_buttons(
-        linked_plots=window.plotitems_all,
-        linked_curves=window.tscurves_all,
-        presets=[
-            {
-                "button_label": "0:30",
-                "x_axis_label": "history (sec)",
-                "x_axis_divisor": 1,
-                "x_axis_range": (-30, 0),
-            },
-            {
-                "button_label": "01:00",
-                "x_axis_label": "history (sec)",
-                "x_axis_divisor": 1,
-                "x_axis_range": (-60, 0),
-            },
-            {
-                "button_label": "03:00",
-                "x_axis_label": "history (min)",
-                "x_axis_divisor": 60,
-                "x_axis_range": (-3, 0),
-            },
-            {
-                "button_label": "05:00",
-                "x_axis_label": "history (min)",
-                "x_axis_divisor": 60,
-                "x_axis_range": (-5, 0),
-            },
-            {
-                "button_label": "10:00",
-                "x_axis_label": "history (min)",
-                "x_axis_divisor": 60,
-                "x_axis_range": (-10, 0),
-            },
-            {
-                "button_label": "30:00",
-                "x_axis_label": "history (min)",
-                "x_axis_divisor": 60,
-                "x_axis_range": (-30, 0),
-            },
-        ],
-    )
-    window.plot_manager.add_clear_button(linked_curves=window.tscurves_all)
-
     # --------------------------------------------------------------------------
     #   File logger
     # --------------------------------------------------------------------------
+
+    def write_header_to_log():
+        log.write("time[s]\t")
+        log.write("P1_temp[degC]\t")
+        log.write("P2_temp[degC]\t")
+        log.write(f"PT104_temp[{chr(177)}0.015degC]\t")
+
+        ch_labels = [f"CH{ch}[Ohm]" for ch in mux.state.all_scan_list_channels]
+        log.write(f"{chr(9).join(ch_labels)}")  # [TAB]-delimited
+        log.write("\n")
+
+    def write_data_to_log():
+        log.write(f"{log.elapsed():.1f}\t")
+        log.write(f"{bath.state.P1_temp:.2f}\t")
+        log.write(f"{bath.state.P2_temp:.2f}\t")
+        log.write(f"{pt104.state.ch1_T:.3f}")
+
+        for idx, _ch in enumerate(mux.state.all_scan_list_channels):
+            if len(mux.state.readings) <= idx:
+                log.write(f"\t{np.nan:.5e}")
+            else:
+                log.write(f"\t{mux.state.readings[idx]:.5e}")
+        log.write("\n")
 
     log = FileLogger(
         write_header_function=write_header_to_log,
@@ -637,17 +594,44 @@ if __name__ == "__main__":
     pt104_qdev.start()
 
     # --------------------------------------------------------------------------
-    #   Set up timers
-    # --------------------------------------------------------------------------
-
-    timer_GUI = QtCore.QTimer()
-    timer_GUI.timeout.connect(window.update_GUI)
-    timer_GUI.start(CHART_INTERVAL_MS)
-
-    # --------------------------------------------------------------------------
     #   Start the main GUI loop
     # --------------------------------------------------------------------------
 
+    @Slot()
+    def about_to_quit():
+        print("About to quit")
+        app.processEvents()
+        log.close()
+        mux_qdev.quit()
+        pt104_qdev.quit()
+
+        try:
+            mux.close()
+        except:
+            pass
+        try:
+            bath.close()
+        except:
+            pass
+        try:
+            pt104.close()
+        except:
+            pass
+        try:
+            rm.close()
+        except:
+            pass
+
+    app.aboutToQuit.connect(about_to_quit)
+
+    window = MainWindow(
+        qdev_mux=mux_qdev,
+        qdev_pt104=pt104_qdev,
+        dev_bath=bath,
+        qlog=log,
+    )
     window.plot_manager.perform_preset(2)  # Init time axis of the history chart
+    window.timer_GUI.start(CHART_INTERVAL_MS)
     window.show()
+
     sys.exit(app.exec())

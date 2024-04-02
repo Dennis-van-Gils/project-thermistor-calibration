@@ -5,4 +5,4 @@ pyopengl
 pyqtgraph
 pyside6
 
-dvg-devices~=1.3
+dvg-devices~=1.4
