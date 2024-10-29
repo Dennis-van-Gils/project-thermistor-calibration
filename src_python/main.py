@@ -21,8 +21,8 @@ temperature probe, P2: external temperature probe).
 __author__ = "Dennis van Gils"
 __authoremail__ = "vangils.dennis@gmail.com"
 __url__ = "https://github.com/Dennis-van-Gils/project-thermistor-calibration"
-__date__ = "02-04-2024"
-__version__ = "1.1.0"
+__date__ = "29-10-2024"
+__version__ = "1.1.1"
 print(__url__)
 # pylint: disable=wrong-import-position, missing-function-docstring, bare-except
 
@@ -81,8 +81,9 @@ from dvg_devices.Picotech_PT104_protocol_UDP import Picotech_PT104
 from dvg_devices.Picotech_PT104_qdev import Picotech_PT104_qdev
 from dvg_devices.PolyScience_PD_bath_protocol_RS232 import PolyScience_PD_bath
 
-from PySide6 import QtCore, QtGui, QtWidgets as QtWid
-from PySide6.QtCore import Slot
+import qtpy
+from qtpy import QtCore, QtGui, QtWidgets as QtWid
+from qtpy.QtCore import Slot  # type: ignore
 import pyqtgraph as pg
 
 print(f"PySide6   {QtCore.__version__}")  # type: ignore
@@ -487,8 +488,13 @@ if __name__ == "__main__":
     # Create application
     # ------------------
 
+    # Disable dark mode
+    if qtpy.PYQT6 or qtpy.PYSIDE6:
+        sys.argv += ["-platform", "windows:darkmode=0"]
+
     QtCore.QThread.currentThread().setObjectName("MAIN")  # For DEBUG info
     app = QtWid.QApplication(sys.argv)
+    app.setStyle("Fusion")
 
     # Set up multi-threaded communication with devices
     # ------------------------------------------------
@@ -523,7 +529,7 @@ if __name__ == "__main__":
         # issues.
         if bath.is_alive:
             bath.query_P1_temp()
-            bath.query_P2_temp()  # External probe
+            # bath.query_P2_temp()  # External probe
 
         # Add temperature readings to charts
         window.tscurve_P1_temp.appendData(now, bath.state.P1_temp)

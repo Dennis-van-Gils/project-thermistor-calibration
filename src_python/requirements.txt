@@ -4,5 +4,6 @@ psutil
 pyopengl
 pyqtgraph
 pyside6
+qtpy
 
-dvg-devices~=1.4
+dvg-devices~=1.5
